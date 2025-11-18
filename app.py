@@ -1,62 +1,52 @@
-import streamlit as st
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta
+# train.py
+
+from utils import *
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
+from keras import metrics
 from keras.models import load_model
-from utils import calculate_lengths, create_dataset
+import numpy as np
+import os
 
-# Load trained model
-model = load_model("models/lstm_4000.h5")
+# Load synthetic data
+train_x_syn, train_y_syn, _, _ = load_synthetic_data("synthetic_data.txt")
 
-st.title("Menstrual Cycle Predictor")
-st.markdown("Enter at least 4 past menstrual cycles to get predictions.")
+# Load real data
+periods = read_period_file("calendar.txt")
+train_x_real, train_y_real, test_x, test_y, last_known_period = make_train_test_sets(periods)
 
-# Input table for cycle dates
-st.subheader("Enter Past Periods")
-dates_input = st.text_area("Format: YYYY-MM-DD,YYYY-MM-DD per line for Start and End", 
-                           placeholder="2025-09-01,2025-09-05\n2025-10-01,2025-10-05")
+# Combine synthetic and real data
+train_x = np.array(train_x_syn.tolist() + train_x_real.tolist()[-78:])
+train_y = np.array(train_y_syn.tolist() + train_y_real.tolist()[-78:])
 
-if dates_input:
-    try:
-        periods = [tuple(line.strip().split(",")) for line in dates_input.strip().split("\n") if line]
-        # Ensure chronological order
-        periods.sort(key=lambda x: datetime.strptime(x[0], "%Y-%m-%d"))
+# Training configuration
+n_epochs = 4000
+n_steps = 3
+n_features = train_x.shape[2]
 
-        if len(periods) < 4:
-            st.warning("Please enter at least 4 periods (start and end dates).")
-        else:
-            # Calculate lengths
-            cycle_lengths, m_lengths = calculate_lengths(periods)
-            data = np.array([[c, m] for c, m in zip(cycle_lengths, m_lengths)])
-            train_x, _ = create_dataset(data, 3)
+# Build LSTM model
+model = Sequential()
+model.add(LSTM(100, activation="relu", return_sequences=True, input_shape=(n_steps, n_features)))
+model.add(LSTM(100, activation="relu"))
+model.add(Dense(n_features))
+model.compile(optimizer="adam", loss="mse", metrics=[metrics.mae, metrics.mape])
 
-            # Predict next
-            last_seq = np.expand_dims(data[-3:], axis=0)
-            y_pred = model.predict(last_seq, verbose=0)[0]
-            next_cycle = int(round(y_pred[0]))
-            next_menstruation = int(round(y_pred[1]))
+# Train the model
+model.fit(train_x, train_y, epochs=n_epochs, verbose=2)
 
-            last_period_start = datetime.strptime(periods[-1][0], "%Y-%m-%d")
-            predicted_start = last_period_start + timedelta(days=next_cycle)
-            predicted_end = predicted_start + timedelta(days=next_menstruation - 1)
+# Evaluate
+model.evaluate(test_x, test_y)
 
-            st.success(f"Predicted Next Period: {predicted_start.strftime('%Y-%m-%d')} to {predicted_end.strftime('%Y-%m-%d')}")
-            st.info(f"Predicted Cycle Length: {next_cycle} days")
-            st.info(f"Predicted Menstruation Length: {next_menstruation} days")
+# Save the model
+os.makedirs("models", exist_ok=True)
+model_path = f"models/lstm_model_{n_epochs}.h5"
+model.save(model_path)
+print(f"Model saved to {model_path}")
 
-            # Phase indicator
-            today = datetime.today()
-            days_since_last_start = (today - last_period_start).days
-            if days_since_last_start < m_lengths[-1]:
-                phase = "Menstruation"
-            elif days_since_last_start < 14:
-                phase = "Follicular"
-            elif days_since_last_start < next_cycle:
-                phase = "Luteal"
-            else:
-                phase = "New cycle expected soon"
+# Predict
+y_preds = model.predict(test_x, verbose=0)
+predictions = [[int(round(i[0])), int(round(i[1]))] for i in y_preds]
+accuracies = evaluate_predictions(test_y, predictions)
 
-            st.warning(f"Today's cycle phase: {phase}")
-
-    except Exception as e:
-        st.error(f"Error parsing input: {e}")
+print("Accuracy of menstrual cycle length prediction:", round(accuracies[0], 4))
+print("Accuracy of menstruation length prediction:", round(accuracies[1], 4))
