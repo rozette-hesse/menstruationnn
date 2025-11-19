@@ -1,31 +1,39 @@
 import streamlit as st
 import numpy as np
-import pandas as pd
-from keras.models import load_model
+from datetime import datetime
+from tensorflow.keras.models import load_model
 
-# Load the trained model
+# Load trained model (disable compilation for safety)
 model = load_model("final_model.h5", compile=False)
 
-# Title
-st.title("Menstrual Cycle Length & Period Length Predictor")
+st.title("🩸 Menstrual Cycle Predictor")
+st.write("Enter the **start dates** of your last 4 periods to predict your next cycle.")
 
-# User input form
-st.header("Enter Recent Cycle Data")
-with st.form("cycle_form"):
-    last_cycle_length = st.number_input("Last cycle length (days):", min_value=20, max_value=40, value=28)
-    last_menstruation_length = st.number_input("Last menstruation length (days):", min_value=2, max_value=10, value=5)
-    submit_button = st.form_submit_button(label='Predict')
+# Get 4 dates from the user
+dates = []
+for i in range(4):
+    date = st.date_input(f"Period {i + 1} Start Date", key=f"date{i}")
+    dates.append(date)
 
-# Perform prediction when the form is submitted
-if submit_button:
-    # Normalize the inputs for the model
-    X_input = np.array([[last_cycle_length, last_menstruation_length]])
-    X_input = (X_input - np.array([28, 5])) / np.array([7, 2])  # Assumes mean=28,5 and std=7,2 for normalization
+# Sort dates just in case
+dates = sorted(dates)
 
-    prediction = model.predict(X_input)
-    predicted_cycle_length = prediction[0][0] * 7 + 28
-    predicted_menstruation_length = prediction[0][1] * 2 + 5
+# Predict button
+if st.button("Predict Next Period"):
+    # Convert to days between periods
+    try:
+        cycle_lengths = [
+            (dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)
+        ]
+        
+        # Simple average cycle length
+        avg_cycle_length = int(np.mean(cycle_lengths))
 
-    st.subheader("Predicted Results")
-    st.write(f"Predicted Cycle Length: **{predicted_cycle_length:.1f} days**")
-    st.write(f"Predicted Menstruation Length: **{predicted_menstruation_length:.1f} days**")
+        # Predict next date
+        last_period = dates[-1]
+        predicted_next = last_period + np.timedelta64(avg_cycle_length, 'D')
+
+        st.success(f"🗓️ Predicted next period start date: **{predicted_next.strftime('%B %d, %Y')}**")
+
+    except Exception as e:
+        st.error(f"Something went wrong: {e}")
