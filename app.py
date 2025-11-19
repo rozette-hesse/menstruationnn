@@ -1,7 +1,8 @@
 import streamlit as st
 import numpy as np
-from tensorflow.keras.models import load_model
+from keras.models import load_model
 from utils import make_prediction_from_user_input
+
 
 # Load model
 model = load_model("final_model.h5")
