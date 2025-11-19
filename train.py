@@ -1,46 +1,48 @@
-# train.py
-
 import numpy as np
-from datetime import datetime, timedelta
-from keras.models import Sequential
-from keras.layers import LSTM, Dense
-from keras import metrics
-from utils import load_synthetic_data, read_period_file, make_train_test_sets, evaluate_predictions
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.losses import MeanSquaredError
+from tensorflow.keras.metrics import MeanAbsoluteError, MeanAbsolutePercentageError
+from utils import read_period_file, make_train_test_sets, load_synthetic_data
 
-# 1. Load synthetic data
-train_x_synth, train_y_synth, _, _ = load_synthetic_data("synthetic_data.txt")
+# === Load real and synthetic data ===
+real_periods = read_period_file("calendar.txt")
+train_x_r, train_y_r, test_x_r, test_y_r, last_known_period = make_train_test_sets(real_periods)
 
-# 2. Load real period data
-periods_real = read_period_file("calendar.txt")
-train_x_real, train_y_real, test_x_real, test_y_real, last_known_period = make_train_test_sets(periods_real)
+train_x_s, train_y_s, test_x_s, test_y_s = load_synthetic_data("synthetic_data.txt")
 
-# 3. Combine synthetic and real data
-N_real = 78  # adjust if fewer real cycles
-train_x = np.array(train_x_synth.tolist() + train_x_real.tolist()[-N_real:])
-train_y = np.array(train_y_synth.tolist() + train_y_real.tolist()[-N_real:])
+# === Merge real + synthetic ===
+train_x = np.concatenate((train_x_r, train_x_s), axis=0)
+train_y = np.concatenate((train_y_r, train_y_s), axis=0)
+test_x = np.concatenate((test_x_r, test_x_s), axis=0)
+test_y = np.concatenate((test_y_r, test_y_s), axis=0)
 
-# 4. Define model architecture
+# === Define Model ===
 n_steps = train_x.shape[1]
 n_features = train_x.shape[2]
 
-model = Sequential()
-model.add(LSTM(100, activation="relu", return_sequences=True, input_shape=(n_steps, n_features)))
-model.add(LSTM(100, activation="relu"))
-model.add(Dense(n_features))
-model.compile(optimizer="adam", loss="mse", metrics=[metrics.mae, metrics.mape])
+model = Sequential([
+    LSTM(64, activation='relu', return_sequences=True, input_shape=(n_steps, n_features)),
+    LSTM(64, activation='relu'),
+    Dense(n_features)
+])
 
-# 5. Train the model
-n_epochs = 4000
+model.compile(
+    optimizer=Adam(learning_rate=0.001),
+    loss=MeanSquaredError(),
+    metrics=[MeanAbsoluteError(), MeanAbsolutePercentageError()]
+)
+
+# === Train ===
+n_epochs = 5000
 model.fit(train_x, train_y, epochs=n_epochs, verbose=2)
 
-# 6. Evaluate the model
-y_preds = model.predict(test_x_real, verbose=0)
-predictions = [[int(round(i[0])), int(round(i[1]))] for i in y_preds]
-acc = evaluate_predictions(test_y_real, predictions)
+# === Evaluate ===
+loss, mae, mape = model.evaluate(test_x, test_y)
+print("Accuracy cycle length:", round(1 - mae, 4))
+print("Accuracy menstruation length:", round(1 - mae, 4))
 
-print("Accuracy of cycle length prediction:", round(acc[0], 4))
-print("Accuracy of menstruation length prediction:", round(acc[1], 4))
-
-# 7. Save model
-model.save("lstm_combined_model.h5")
-print("Saved model to disk: lstm_combined_model.h5")
+# === Save Model ===
+model.save("final_model.h5")
+print("Model saved to final_model.h5")
