@@ -4,7 +4,7 @@ import pandas as pd
 from keras.models import load_model
 
 # Load the trained model
-model = load_model("final_model.h5")
+model = load_model("final_model.h5", compile=False)
 
 # Title
 st.title("Menstrual Cycle Length & Period Length Predictor")
