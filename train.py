@@ -1,48 +1,61 @@
 import numpy as np
-from tensorflow.keras.models import Sequential, load_model
+import pandas as pd
+from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import MeanSquaredError
 from tensorflow.keras.metrics import MeanAbsoluteError, MeanAbsolutePercentageError
-from utils import read_period_file, make_train_test_sets, load_synthetic_data
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+import joblib
+import os
 
-# === Load real and synthetic data ===
-real_periods = read_period_file("calendar.txt")
-train_x_r, train_y_r, test_x_r, test_y_r, last_known_period = make_train_test_sets(real_periods)
+# Load data from file
+def load_period_data(file_path):
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
 
-train_x_s, train_y_s, test_x_s, test_y_s = load_synthetic_data("synthetic_data.txt")
+    starts = []
+    ends = []
+    for line in lines:
+        if line.startswith("Start"):
+            starts.append(line.split(":")[-1].strip())
+        elif line.startswith("End"):
+            ends.append(line.split(":")[-1].strip())
 
-# === Merge real + synthetic ===
-train_x = np.concatenate((train_x_r, train_x_s), axis=0)
-train_y = np.concatenate((train_y_r, train_y_s), axis=0)
-test_x = np.concatenate((test_x_r, test_x_s), axis=0)
-test_y = np.concatenate((test_y_r, test_y_s), axis=0)
+    dates = pd.DataFrame({"start": pd.to_datetime(starts), "end": pd.to_datetime(ends)})
+    dates = dates.sort_values("start").reset_index(drop=True)
+    dates["cycle_length"] = dates["start"].diff().dt.days
+    dates["menstruation_length"] = (dates["end"] - dates["start"]).dt.days
+    dates = dates.dropna()
+    return dates[["cycle_length", "menstruation_length"]]
 
-# === Define Model ===
-n_steps = train_x.shape[1]
-n_features = train_x.shape[2]
+# Prepare dataset
+def prepare_data(df):
+    scaler = MinMaxScaler()
+    data_scaled = scaler.fit_transform(df)
+    joblib.dump(scaler, "scaler.save")
 
-model = Sequential([
-    LSTM(64, activation='relu', return_sequences=True, input_shape=(n_steps, n_features)),
-    LSTM(64, activation='relu'),
-    Dense(n_features)
-])
+    X, y = [], []
+    for i in range(1, len(data_scaled)):
+        X.append(data_scaled[i-1])
+        y.append(data_scaled[i])
+    return np.array(X), np.array(y), scaler
 
-model.compile(
-    optimizer=Adam(learning_rate=0.001),
-    loss=MeanSquaredError(),
-    metrics=[MeanAbsoluteError(), MeanAbsolutePercentageError()]
-)
+# Train the model
+def train_model(X, y, epochs=500):
+    X = X.reshape((X.shape[0], 1, X.shape[1]))
+    model = Sequential([
+        LSTM(100, activation='relu', input_shape=(X.shape[1], X.shape[2])),
+        Dense(y.shape[1])
+    ])
+    model.compile(optimizer=Adam(), loss='mse', metrics=[MeanAbsoluteError(), MeanAbsolutePercentageError()])
+    model.fit(X, y, epochs=epochs, verbose=1, validation_split=0.2)
+    model.save("final_model.h5")
+    print("Model saved as final_model.h5")
 
-# === Train ===
-n_epochs = 5000
-model.fit(train_x, train_y, epochs=n_epochs, verbose=2)
-
-# === Evaluate ===
-loss, mae, mape = model.evaluate(test_x, test_y)
-print("Accuracy cycle length:", round(1 - mae, 4))
-print("Accuracy menstruation length:", round(1 - mae, 4))
-
-# === Save Model ===
-model.save("final_model.h5")
-print("Model saved to final_model.h5")
+# Main
+if __name__ == '__main__':
+    df = load_period_data("calendar.txt")
+    X, y, scaler = prepare_data(df)
+    train_model(X, y)
+    print("Training complete.")
