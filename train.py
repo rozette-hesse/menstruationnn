@@ -1,61 +1,47 @@
 import numpy as np
 import pandas as pd
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.metrics import MeanAbsoluteError, MeanAbsolutePercentageError
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
-import joblib
+from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
+from utils import read_period_file, make_train_test_sets
 import os
 
-# Load data from file
-def load_period_data(file_path):
-    with open(file_path, 'r') as file:
-        lines = file.readlines()
+# === LOAD DATA ===
+data = read_period_file('calendar.txt')
+train_X, train_y, test_X, test_y = make_train_test_sets(data)
 
-    starts = []
-    ends = []
-    for line in lines:
-        if line.startswith("Start"):
-            starts.append(line.split(":")[-1].strip())
-        elif line.startswith("End"):
-            ends.append(line.split(":")[-1].strip())
+# === NORMALIZE DATA ===
+scaler_X = MinMaxScaler()
+scaler_y = MinMaxScaler()
+train_X = scaler_X.fit_transform(train_X)
+test_X = scaler_X.transform(test_X)
+train_y = scaler_y.fit_transform(train_y)
+test_y = scaler_y.transform(test_y)
 
-    dates = pd.DataFrame({"start": pd.to_datetime(starts), "end": pd.to_datetime(ends)})
-    dates = dates.sort_values("start").reset_index(drop=True)
-    dates["cycle_length"] = dates["start"].diff().dt.days
-    dates["menstruation_length"] = (dates["end"] - dates["start"]).dt.days
-    dates = dates.dropna()
-    return dates[["cycle_length", "menstruation_length"]]
+train_X = train_X.reshape((train_X.shape[0], 1, train_X.shape[1]))
+test_X = test_X.reshape((test_X.shape[0], 1, test_X.shape[1]))
 
-# Prepare dataset
-def prepare_data(df):
-    scaler = MinMaxScaler()
-    data_scaled = scaler.fit_transform(df)
-    joblib.dump(scaler, "scaler.save")
+# === BUILD MODEL ===
+model = Sequential()
+model.add(LSTM(64, activation='relu', input_shape=(train_X.shape[1], train_X.shape[2])))
+model.add(Dense(train_y.shape[1]))
+model.compile(optimizer='adam', loss='mse', metrics=[mean_absolute_error, mean_absolute_percentage_error])
 
-    X, y = [], []
-    for i in range(1, len(data_scaled)):
-        X.append(data_scaled[i-1])
-        y.append(data_scaled[i])
-    return np.array(X), np.array(y), scaler
+# === TRAIN MODEL ===
+history = model.fit(train_X, train_y, epochs=100, batch_size=32, validation_data=(test_X, test_y), verbose=1)
 
-# Train the model
-def train_model(X, y, epochs=500):
-    X = X.reshape((X.shape[0], 1, X.shape[1]))
-    model = Sequential([
-        LSTM(100, activation='relu', input_shape=(X.shape[1], X.shape[2])),
-        Dense(y.shape[1])
-    ])
-    model.compile(optimizer=Adam(), loss='mse', metrics=[MeanAbsoluteError(), MeanAbsolutePercentageError()])
-    model.fit(X, y, epochs=epochs, verbose=1, validation_split=0.2)
-    model.save("final_model.h5")
-    print("Model saved as final_model.h5")
+# === EVALUATE MODEL ===
+pred_y = model.predict(test_X)
+pred_y = scaler_y.inverse_transform(pred_y)
+test_y = scaler_y.inverse_transform(test_y)
 
-# Main
-if __name__ == '__main__':
-    df = load_period_data("calendar.txt")
-    X, y, scaler = prepare_data(df)
-    train_model(X, y)
-    print("Training complete.")
+mae = mean_absolute_error(test_y, pred_y)
+mape = mean_absolute_percentage_error(test_y, pred_y)
+print("Mean Absolute Error:", mae)
+print("Mean Absolute Percentage Error:", mape)
+
+# === SAVE MODEL ===
+os.makedirs("models", exist_ok=True)
+model.save("models/final_model.h5")
+print("Model saved to models/final_model.h5")
