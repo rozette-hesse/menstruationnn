@@ -52,6 +52,13 @@ if st.button("Predict Next Period"):
             last_start = starts[-1]
             next_start = last_start + timedelta(days=predicted_gap)
 
+if next_start <= datetime.today().date():
+    # Add one more cycle length to suggest future cycle
+    next_start = next_start + timedelta(days=predicted_gap)
+
+st.success(f"📅 Next period predicted to start: **{next_start.strftime('%B %d, %Y')}**")
+
+
             st.success(f"📅 Next period predicted to start: **{next_start.strftime('%B %d, %Y')}**")
 
             # Determine cycle phase
