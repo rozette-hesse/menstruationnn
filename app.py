@@ -1,75 +1,68 @@
 import streamlit as st
-from datetime import datetime, timedelta
-import numpy as np
+import pandas as pd
 import tensorflow as tf
+from datetime import datetime, timedelta
+import os
 
-def calculate_phase(today, last_start_date, average_cycle_length):
-    days_since_last_period = (today - last_start_date).days
-    cycle_day = days_since_last_period % average_cycle_length
+# Debug: show working directory and files
+st.sidebar.write("📂 Working Directory:", os.getcwd())
+st.sidebar.write("📄 Files:", os.listdir())
 
-    if cycle_day <= 5:
-        return "Menstrual Phase"
-    elif 6 <= cycle_day <= 13:
-        return "Follicular Phase"
-    elif 14 <= cycle_day <= 16:
-        return "Ovulation Phase"
-    elif 17 <= cycle_day <= average_cycle_length:
-        return "Luteal Phase"
-    else:
-        return "Unknown Phase"
+# Load model from current directory
+model_path = os.path.join(os.path.dirname(__file__), "final_model.h5")
+model = tf.keras.models.load_model(model_path)
 
-def get_date_input(label):
-    return st.date_input(label, value=None, key=label)
+st.title("Menstrual Cycle Predictor")
+st.write("Please enter the **start and end dates** of your last 4 periods.")
 
-def main():
-    st.title("Menstrual Cycle Predictor")
-    st.write("Please enter the **start and end dates** of your last 4 periods.")
+dates = []
 
-    start_dates = []
-    end_dates = []
+# Get 4 periods
+for i in range(4):
+    st.subheader(f"Period {i+1}")
+    start_date = st.date_input(f"Start Date {i+1}", key=f"start_{i}")
+    end_date = st.date_input(f"End Date {i+1}", key=f"end_{i}")
+    dates.append((start_date, end_date))
 
-    for i in range(1, 5):
-        st.subheader(f"Period {i}")
-        start = get_date_input(f"Start Date {i}")
-        end = get_date_input(f"End Date {i}")
-        if start and end:
-            start_dates.append(start)
-            end_dates.append(end)
+if st.button("Predict Next Period"):
+    try:
+        cycle_lengths = []
+        period_lengths = []
 
-    if st.button("Predict Next Period"):
-        try:
-            if len(start_dates) < 4:
-                st.warning("Please enter all 4 periods.")
-                return
+        for i in range(1, 4):
+            delta = (dates[i][0] - dates[i-1][0]).days
+            cycle_lengths.append(delta)
 
-            # Calculate cycle gaps between starts
-            cycle_gaps = [(start_dates[i] - start_dates[i+1]).days for i in range(3)]
-            avg_cycle_length = int(np.mean(cycle_gaps))
+        for start, end in dates:
+            period_lengths.append((end - start).days)
 
-            # Load model
-            model = tf.keras.models.load_model("/mnt/data/final_model.h5")
+        avg_cycle = sum(cycle_lengths) / len(cycle_lengths)
+        avg_period = sum(period_lengths) / len(period_lengths)
 
-            # Prepare input shape
-            input_data = np.array(cycle_gaps).reshape(1, 3, 1)
-            predicted_gap = int(model.predict(input_data)[0][0])
+        # Prepare input for model (shape must match model input: (1, 3, 2))
+        last_cycle = (dates[-1][0] - dates[-2][0]).days
+        last_period = (dates[-1][1] - dates[-1][0]).days
 
-            # Get latest start date
-            last_start = max(start_dates)
-            next_start = last_start + timedelta(days=predicted_gap)
+        input_data = [[[avg_cycle, avg_period], [last_cycle, last_period], [avg_cycle, avg_period]]]
+        input_tensor = tf.convert_to_tensor(input_data, dtype=tf.float32)
 
-            # If predicted date is in the past, suggest the next one
-            if next_start <= datetime.today().date():
-                next_start += timedelta(days=predicted_gap)
+        prediction = model.predict(input_tensor)[0][0]
+        predicted_start = dates[-1][0] + timedelta(days=int(prediction))
 
-            st.success(f"📅 Next period predicted to start: **{next_start.strftime('%B %d, %Y')}**")
+        st.success(f"📅 Next period predicted to start: **{predicted_start.strftime('%B %d, %Y')}**")
 
-            # Phase tracking
-            today = datetime.today().date()
-            phase = calculate_phase(today, last_start, avg_cycle_length)
-            st.info(f"📅 Today is {today.strftime('%B %d, %Y')}. Likely in: **{phase}**")
+        # Optional: Show current phase
+        today = datetime.now().date()
+        days_since_last = (today - dates[-1][0]).days
+        if days_since_last <= avg_period:
+            phase = "Menstrual Phase"
+        elif days_since_last <= 14:
+            phase = "Follicular Phase"
+        elif days_since_last <= 21:
+            phase = "Ovulation Phase"
+        else:
+            phase = "Luteal Phase"
 
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
-
-if __name__ == "__main__":
-    main()
+        st.info(f"📅 Today is **{today.strftime('%B %d, %Y')}**. Likely in: **{phase}**")
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
