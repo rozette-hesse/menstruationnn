@@ -1,77 +1,76 @@
 import streamlit as st
-import datetime
 import numpy as np
+import pandas as pd
 import tensorflow as tf
-from tensorflow.keras.models import load_model
+from datetime import datetime
 
-# Load model without compiling (avoids deserialization issues)
-model_path = "./final_model.h5"
-model = load_model(model_path, compile=False)
+# Load model safely
+model_path = "final_model.h5"
+try:
+    model = tf.keras.models.load_model(model_path, compile=False)
+except Exception as e:
+    st.error(f"❌ Failed to load model: {e}")
+    st.stop()
 
-# --- App UI ---
-st.title("🩸 Menstrual Cycle Predictor")
-st.markdown("Please enter the start and end dates of your last 4 periods.")
-
-periods = []
+st.title("Period Predictor")
+st.write("Please enter the **start and end dates** of your last 4 periods.")
 
 # Input for 4 periods
-for i in range(4):
-    st.subheader(f"Period {i + 1}")
-    start = st.date_input(f"Start Date {i + 1}", key=f"start_{i}")
-    end = st.date_input(f"End Date {i + 1}", key=f"end_{i}")
+def get_period_input(period_num):
+    start = st.date_input(f"Start Date {period_num}", key=f"start{period_num}")
+    end = st.date_input(f"End Date {period_num}", key=f"end{period_num}")
+    return start, end
+
+periods = []
+for i in range(1, 5):
+    start, end = get_period_input(i)
     periods.append((start, end))
 
-# Prediction logic
-def predict_next_period(dates):
-    cycle_lengths = []
-    period_lengths = []
+# Calculate cycle lengths
+cycle_lengths = []
+for i in range(len(periods) - 1):
+    diff = (periods[i][0] - periods[i + 1][0]).days
+    cycle_lengths.append(abs(diff))
 
-    for i in range(3):
-        delta = (dates[i][0] - dates[i + 1][0]).days
-        cycle_lengths.append(delta)
-
-    for start, end in dates:
-        period_lengths.append((end - start).days)
-
+# Predict next period start
+def predict_next_period(cycle_lengths):
+    if len(cycle_lengths) < 3:
+        st.warning("Need 4 periods (3 cycles) to make a prediction.")
+        return None
     avg_cycle = np.mean(cycle_lengths)
-    avg_duration = np.mean(period_lengths)
+    last_start = periods[0][0]
+    next_start = last_start + pd.Timedelta(days=avg_cycle)
+    return next_start
 
-    # Prepare model input
-    X_input = np.array([[avg_cycle, avg_duration]])
-    prediction = model.predict(X_input)
-
-    return int(prediction[0][0])
-
-# Determine phase logic
-def determine_phase(start_date):
-    today = datetime.date.today()
-    days_since = (today - start_date).days
-
-    if days_since < 0:
-        return "Not started yet"
-    elif days_since <= 5:
-        return "Menstrual Phase"
-    elif days_since <= 13:
-        return "Follicular Phase"
-    elif days_since <= 16:
-        return "Ovulation Phase"
-    elif days_since <= 28:
-        return "Luteal Phase"
-    else:
-        return "Uncertain"
-
-# Predict button
 if st.button("Predict Next Period"):
     try:
-        predicted_gap = predict_next_period(periods)
-        latest_start = max([p[0] for p in periods])
-        next_period_start = latest_start + datetime.timedelta(days=predicted_gap)
+        # Prepare model input
+        start_dates = [p[0].toordinal() for p in periods]
+        end_dates = [p[1].toordinal() for p in periods]
+        inputs = np.array([start_dates[:3], end_dates[:3]]).T.reshape(1, 3, 2)
 
-        st.success(f"📅 Next period predicted to start: **{next_period_start.strftime('%B %d, %Y')}**")
+        # Predict
+        prediction = model.predict(inputs)
+        predicted_days = int(prediction[0][0])
+        next_start = periods[0][0] + pd.Timedelta(days=predicted_days)
 
-        today = datetime.date.today()
-        phase = determine_phase(latest_start)
-        st.info(f"📅 Today is {today.strftime('%B %d, %Y')}. Likely in: **{phase}**")
+        st.success(f"📅 Next period predicted to start: **{next_start.strftime('%B %d, %Y')}**")
+
+        # Estimate phase
+        today = datetime.today().date()
+        days_since_start = (today - periods[0][0]).days
+        if days_since_start < 0:
+            phase = "Pre-period"
+        elif days_since_start <= (periods[0][1] - periods[0][0]).days:
+            phase = "Menstrual Phase"
+        elif days_since_start <= 14:
+            phase = "Follicular Phase"
+        elif days_since_start <= 21:
+            phase = "Ovulation Phase"
+        else:
+            phase = "Luteal Phase"
+
+        st.info(f"📅 Today is **{today.strftime('%B %d, %Y')}**. Likely in: **{phase}**")
 
     except Exception as e:
-        st.error(f"❌ An error occurred
+        st.error(f"❌ An error occurred: {e}")
